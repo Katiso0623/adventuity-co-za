@@ -1,0 +1,63 @@
+# Publishes www.adventuity.co.za (the Adventuity Floodline website) on GitHub Pages.
+# Every 30 minutes it copies the Floodline files from Katiso0623/adventuity-hub (folder floodline/) into this
+# repository; when anything changed it commits the copy and publishes. A push here (for example an update made
+# straight in this repository) or "Run workflow" also publishes.
+name: Publish www.adventuity.co.za
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '7,37 * * * *'
+    - cron: '23 4 1 * *'     # monthly heartbeat so GitHub keeps the timed runs switched on
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Get this repository
+        uses: actions/checkout@v4
+      - name: Get the Floodline files from adventuity-hub
+        uses: actions/checkout@v4
+        with:
+          repository: Katiso0623/adventuity-hub
+          path: _hub
+          sparse-checkout: floodline
+          persist-credentials: false
+      - name: Copy them in and record any change
+        id: sync
+        run: |
+          test -f _hub/floodline/index.html || { echo "::error::floodline/index.html not found in adventuity-hub"; exit 1; }
+          rsync -a --delete --exclude '.git' --exclude '.github' --exclude '_hub' --exclude 'CNAME' --exclude 'README.md' --exclude '.nojekyll' _hub/floodline/ ./
+          rm -rf _hub
+          echo "www.adventuity.co.za" > CNAME
+          touch .nojekyll
+          if [ "${{ github.event.schedule }}" = "23 4 1 * *" ]; then date -u +%Y-%m-%d > .github/heartbeat; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "changed=0" >> "$GITHUB_OUTPUT"; echo "No change from adventuity-hub."
+          else
+            git commit -q -m "Sync the Floodline site from adventuity-hub/floodline" && git push -q
+            git diff --name-only HEAD~1 HEAD | grep -qv '^\.github/heartbeat$' && echo "changed=1" >> "$GITHUB_OUTPUT" || echo "changed=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Package the site
+        if: github.event_name != 'schedule' || steps.sync.outputs.changed == '1'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - name: Publish to GitHub Pages
+        id: deploy
+        if: github.event_name != 'schedule' || steps.sync.outputs.changed == '1'
+        uses: actions/deploy-pages@v4
